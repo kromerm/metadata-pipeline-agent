@@ -41,13 +41,13 @@ Change pipeline behavior by updating rows in SQL — no pipeline edits, no redep
 ### 1 — Install the Fabric Data Factory MCP Server
 
 ```bash
-dotnet tool install --global Microsoft.DataFactory.MCP
+dotnet tool install --global microsoft.fabric.mcp
 ```
 
 Verify:
 
 ```bash
-datafactorymcp --version
+fabmcp --version
 ```
 
 ### 2 — Configure the MCP Server in VS Code
@@ -59,7 +59,7 @@ Create or update `.vscode/mcp.json` in your project:
   "mcp": {
     "servers": {
       "datafactory": {
-        "command": "datafactorymcp"
+        "command": "fabmcp"
       }
     }
   }
