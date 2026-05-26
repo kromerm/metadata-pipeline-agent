@@ -172,6 +172,91 @@ README.md
 - Check that `pipeline_name` in `dbo.pipeline_parameters` exactly matches `@pipeline().Pipeline` (case-sensitive)
 - Confirm `is_enabled = 1` and `environment` matches your target environment
 
+**Can't see notebook output from the Fabric REST API**
+- The jobs status endpoint (`GET .../notebooks/{id}/jobs/instances/{jobId}`) returns lifecycle state only — it does not expose cell `print()` output. Verify your pipeline ran correctly by querying `dbo.pipeline_logging` directly (see section below).
+
+**Script/Execute SP activity fails with connection errors**
+- Fabric SQL Database connections in pipeline activities sometimes require explicit connection re-configuration. A reliable alternative: use a **Notebook activity** with the pyodbc + `notebookutils` token pattern to call your logging SP. See `notebook_code.py` in this repo for a working example.
+
+---
+
+## Local Verification & Manual Database Connection
+
+After running a pipeline, query `dbo.pipeline_logging` directly from your local machine to confirm rows were written. This is the most reliable verification method — the Fabric REST API returns only lifecycle metadata, not cell output.
+
+### Authentication
+
+Fabric SQL Database uses **Azure Active Directory token authentication only** — username/password and SQL auth are not supported. Use `pyodbc` with a bearer token from the Azure CLI.
+
+### Prerequisites
+
+- Python 3.12+ with `pyodbc` installed: `pip install pyodbc`
+  - Note: As of May 2026, `pyodbc` 5.x does not install cleanly on Python 3.14. Use 3.12.
+- [ODBC Driver 18 for SQL Server](https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server)
+- Azure CLI authenticated: `az login`
+
+### Connection String Format
+
+Your Fabric SQL Database endpoint follows this pattern:
+```
+<encoded-workspace-id>.msit-database.fabric.microsoft.com,1433
+```
+This is **different from Azure SQL** (`*.database.windows.net`). Find your endpoint in the Fabric portal → SQL Database item → Settings → Connection strings.
+
+### Local Verification Script
+
+```python
+import pyodbc, struct, subprocess, json
+
+# On Windows, Python subprocess cannot resolve 'az' via PATH.
+# Always use the full path to az.cmd.
+AZ_CMD = r'C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd'
+
+result = subprocess.run(
+    [AZ_CMD, 'account', 'get-access-token', '--resource', 'https://database.windows.net/'],
+    capture_output=True, text=True, shell=False
+)
+access_token = json.loads(result.stdout)['accessToken']
+
+# Package token in the format pyodbc expects for SQL_COPT_SS_ACCESS_TOKEN
+token_bytes = access_token.encode('utf-16-le')
+token_struct = struct.pack(f'<I{len(token_bytes)}s', len(token_bytes), token_bytes)
+SQL_COPT_SS_ACCESS_TOKEN = 1256
+
+SERVER   = '<your-workspace-endpoint>.msit-database.fabric.microsoft.com,1433'
+DATABASE = 'YourDatabaseName-<guid>'
+
+conn_str = (
+    f'DRIVER={{ODBC Driver 18 for SQL Server}};'
+    f'SERVER={SERVER};DATABASE={DATABASE};'
+    'Encrypt=yes;TrustServerCertificate=yes'
+)
+conn = pyodbc.connect(conn_str, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})
+
+cursor = conn.cursor()
+cursor.execute('''
+    SELECT pipeline_name, pipeline_run_id, log_level, status, message, logged_at
+    FROM dbo.pipeline_logging
+    ORDER BY logged_at DESC
+''')
+for row in cursor.fetchall():
+    print(row)
+cursor.close()
+conn.close()
+```
+
+A ready-to-run version of this script is included in this repo as [`local_verify.py`](local_verify.py).
+
+### Inside Fabric Notebooks
+
+When running inside a Fabric Notebook activity, use `notebookutils` to get the token — no `az` CLI required:
+
+```python
+access_token = notebookutils.credentials.getToken('https://database.windows.net/')
+```
+
+The rest of the pyodbc pattern is identical to the local script above.
+
 ---
 
 ## Contributing
