@@ -70,14 +70,7 @@ Restart VS Code after saving.
 
 ### 3 — Deploy the SQL Schema
 
-Connect to your **Fabric SQL Database** and run:
-
-```sql
--- Run this against your Fabric SQL Database
--- (not Azure SQL DB — this is the native Fabric SQL Database item)
-```
-
-Then execute the contents of [`sql/schema.sql`](sql/schema.sql). This creates:
+Connect to your **Fabric SQL Database** (not Azure SQL DB — this is the native Fabric SQL Database item) and execute [`sql/schema.sql`](sql/schema.sql). This creates:
 
 - `dbo.pipeline_parameters` — runtime configuration table
 - `dbo.pipeline_logging` — structured log table
