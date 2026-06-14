@@ -24,20 +24,32 @@ I help you design and create **metadata-driven Fabric Data Factory pipelines** �
 Every pipeline I create follows this pattern:
 
 ```
-[Lookup — read pipeline_parameters]
+[Lookup_<param> — one Lookup per parameter, firstRowOnly: true]
         ↓
-[Set Variables — extract named params]
-        ↓
-[Log_Start → dbo.usp_log_pipeline_event]
+[Log_Start (SqlServerStoredProcedure) → dbo.usp_log_pipeline_event]
         ↓
 [Your business logic activities]
        / \
  Success  Failure
       ↓      ↓
-Log_Success  Log_Failure → dbo.usp_log_pipeline_event
+Log_Success  Log_Failure (SqlServerStoredProcedure) → dbo.usp_log_pipeline_event
 ```
 
+> **Activity type rule:** Always use `type: SqlServerStoredProcedure` for logging calls. The `Script` activity type fails validation when combined with other activities using `externalReferences`.
+
 The `dbo.pipeline_parameters` table controls **what your pipeline does**. You change behavior by updating rows in SQL — no pipeline edits required.
+
+---
+
+## Before We Begin
+
+Please confirm you've completed these two prerequisites:
+
+1. **Fabric SQL Database** — Have you created the Fabric SQL Database and run the setup script from the README? It creates the `dbo.pipeline_parameters` and `dbo.pipeline_logging` tables and the `dbo.usp_log_pipeline_event` stored procedure.
+
+2. **Fabric Connection** — Have you created a Fabric Connection to that SQL Database? I'll need the connection name or ID to wire the Lookup and logging activities. You can create one in the Fabric portal under **Settings → Connections**, or tell me and I can help you create one.
+
+Once both are in place, let me know the **connection name** and we'll start building.
 
 ---
 
@@ -165,13 +177,113 @@ Find your endpoint in: Fabric portal → SQL Database item → Settings → Conn
 
 The Fabric REST API jobs endpoint (`GET .../notebooks/{id}/jobs/instances/{jobId}`) returns only lifecycle state — it **does not expose `print()` output from Notebook cells**. To verify rows were written, query `dbo.pipeline_logging` directly via pyodbc. See `local_verify.py` in this repo for a working script.
 
+### Parameter Extraction — Never Use filter() + @item() in SetVariable
+
+`@item()` is only valid inside ForEach child activities. Using it in a `SetVariable` expression — even inside `filter()` — throws: _"@item() syntax can only be used in the filter activity or child activities of a foreach activity"_.
+
+**Correct pattern:** one Lookup per parameter with `firstRowOnly: true`:
+```sql
+SELECT parameter_value FROM dbo.pipeline_parameters
+WHERE pipeline_name = '@{pipeline().Pipeline}'
+  AND parameter_name = 'adls_container'
+  AND is_enabled = 1 AND environment IN ('all', 'dev')
+```
+Reference directly in downstream activities — no `SetVariable` needed:
+```
+@activity('Lookup_adls_container').output.firstRow.parameter_value
+```
+
 ### Notebook vs. Script Activity for Logging
 
-The current `pipeline-v3.json` uses **Set Variable → Notebook activity** (`nb_log_pipeline_event`) for all logging. This is a reliable pattern when Script/Execute SP activities have connection issues. The intended production architecture is **Lookup → Script/SP** (calling `dbo.usp_log_pipeline_event` directly), but the Notebook approach is a valid alternative that avoids pipeline-level connection configuration.
+Always use `type: SqlServerStoredProcedure` for logging. The `Script` activity fails validation when mixed with other activities using `externalReferences`.
 
-When recommending the logging approach:
-- **Notebook activity** — more resilient to connection config issues; requires a Fabric Notebook item; uses `notebookutils` for token
-- **Script/Execute SP** — lower overhead; closer to SQL-native; requires a working SQL connection configured in the pipeline
+**SqlServerStoredProcedure rules (confirmed working — native Fabric format):**
+- **No** `externalReferences` or `policy` field at the activity level
+- `connectionSettings` goes at the **activity level** (NOT inside `typeProperties`)
+- `name` = artifact display name (e.g. `"mark-metastore"`)
+- `typeProperties` inside `properties` needs both `workspaceId` and `artifactId` of the Fabric SQL Database
+
+```json
+"connectionSettings": {
+  "name": "<sql-db-display-name>",
+  "properties": {
+    "annotations": [],
+    "type": "FabricSqlDatabase",
+    "typeProperties": { "workspaceId": "<workspace-guid>", "artifactId": "<sql-db-artifact-guid>" },
+    "externalReferences": { "connection": "<sql-connection-guid>" }
+  }
+},
+"typeProperties": {
+  "storedProcedureName": "dbo.usp_log_pipeline_event",
+  "storedProcedureParameters": { ... }
+}
+```
+
+### Copy Activity (ADLS Gen2 → Lakehouse Table)
+
+Connections in Copy activities go inside **`datasetSettings`**, NOT at the activity level:
+
+- ADLS Gen2 source: `source.datasetSettings.externalReferences = { "connection": "<guid>" }` — **no** `connectionSettings` wrapper for the source
+- Lakehouse sink: use the native format with `connectionSettings.properties` inside `datasetSettings`:
+  - `name` = Lakehouse display name
+  - `type` = `"Lakehouse"`
+  - `typeProperties`: `workspaceId` + `artifactId` + `rootFolder`
+  - `externalReferences.connection`: Lakehouse connection GUID (separate from artifact ID — find in Fabric → Settings → Connections)
+- **No** `externalReferences` at the Copy activity level
+
+### ForEach Activity
+
+The `items` field requires the **Expression object** format — a plain string is rejected:
+
+```json
+"items": { "value": "@activity('GetMetadata').output.childItems", "type": "Expression" }
+```
+
+This same `{"value": "...", "type": "Expression"}` format is also required for `IfCondition.expression` and `Filter.condition`.
+
+### Lookup Activity (SQL source)
+
+Connection goes inside `typeProperties.datasetSettings.connectionSettings` — **not** at the activity level. Use the native Fabric format:
+
+```json
+"datasetSettings": {
+  "type": "AzureSqlTable",
+  "connectionSettings": {
+    "name": "<sql-db-display-name>",
+    "properties": {
+      "annotations": [],
+      "type": "FabricSqlDatabase",
+      "typeProperties": { "workspaceId": "<workspace-guid>", "artifactId": "<sql-db-artifact-guid>" },
+      "externalReferences": { "connection": "<sql-connection-guid>" }
+    }
+  },
+  "typeProperties": {}
+}
+```
+
+`datasetSettings` is required; omitting it causes a runtime failure even though the API accepts the definition.
+
+### GetMetadata Activity (ADLS source)
+
+Connection goes inside `typeProperties.datasetSettings.externalReferences.connection` — **never** at the activity level. Use `type: "Binary"` for the dataset. Include `storeSettings` and `formatSettings` alongside `datasetSettings` inside `typeProperties`:
+
+```json
+"typeProperties": {
+  "fieldList": ["childItems"],
+  "datasetSettings": {
+    "annotations": [],
+    "type": "Binary",
+    "typeProperties": {
+      "location": { "type": "AzureBlobFSLocation", "fileSystem": "@{activity('Lookup_adls_container').output.firstRow.parameter_value}" }
+    },
+    "externalReferences": { "connection": "<adls-connection-guid>" }
+  },
+  "storeSettings": { "type": "AzureBlobFSReadSettings", "recursive": false, "enablePartitionDiscovery": false },
+  "formatSettings": { "type": "BinaryReadSettings" }
+}
+```
+
+> **MCP false-failure note:** `mcp_datafactorymc_update_pipeline_definition` sometimes returns `"error": "HttpRequestError"` even when the update succeeds. Always verify by calling `mcp_datafactorymc_get_pipeline_definition` after any update.
 
 ### Python Environment (local development)
 

@@ -19,7 +19,7 @@ The agent builds every pipeline around two SQL tables in your Fabric SQL Databas
 
 1. A **Lookup activity** reads all enabled parameters for the current pipeline from `dbo.pipeline_parameters`.
 2. Your business logic activities use those values via dynamic expressions — no hard-coded config.
-3. A **Script / Execute SP activity** writes Start, Success, and Failure events to `dbo.pipeline_logging` by calling `dbo.usp_log_pipeline_event`.
+3. A **`SqlServerStoredProcedure` activity** writes Start, Success, and Failure events to `dbo.pipeline_logging` by calling `dbo.usp_log_pipeline_event`.
 
 Change pipeline behavior by updating rows in SQL — no pipeline edits, no redeployments.
 
@@ -171,12 +171,15 @@ README.md
 **Lookup activity returns no rows**
 - Check that `pipeline_name` in `dbo.pipeline_parameters` exactly matches `@pipeline().Pipeline` (case-sensitive)
 - Confirm `is_enabled = 1` and `environment` matches your target environment
+- The Lookup `typeProperties` must include `datasetSettings` with `connectionSettings` pointing to the SQL connection (see pattern below)
+
+**Lookup / SqlServerStoredProcedure fails — connection not found**
+- Lookup requires `datasetSettings.connectionSettings` inside `typeProperties` (not `externalReferences` at the activity level)
+- `SqlServerStoredProcedure` requires `connectionSettings` at the activity level with `externalReferences` inside it
+- See the confirmed JSON patterns in `.github/copilot-instructions.md`
 
 **Can't see notebook output from the Fabric REST API**
-- The jobs status endpoint (`GET .../notebooks/{id}/jobs/instances/{jobId}`) returns lifecycle state only — it does not expose cell `print()` output. Verify your pipeline ran correctly by querying `dbo.pipeline_logging` directly (see section below).
-
-**Script/Execute SP activity fails with connection errors**
-- Fabric SQL Database connections in pipeline activities sometimes require explicit connection re-configuration. A reliable alternative: use a **Notebook activity** with the pyodbc + `notebookutils` token pattern to call your logging SP. See `notebook_code.py` in this repo for a working example.
+- The jobs status endpoint returns lifecycle state only. Verify runs by querying `dbo.pipeline_logging` directly.
 
 ---
 
