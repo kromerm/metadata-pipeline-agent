@@ -122,9 +122,33 @@ agents/
   pipeline-builder.agent.md # Copilot agent mode definition
 sql/
   schema.sql                # DDL for both tables + stored procedure + sample data
-examples/                   # (optional) Example pipeline patterns
+examples/
+  PL_MetaDriven_Bronze_Ingest.json  # Complete, deployable sample pipeline (reference artifact)
+  multi-table-copy.md       # Walkthrough: multi-source copy to a Lakehouse
+  incremental-watermark.md  # Walkthrough: watermark-based incremental load
+  stored-proc-sequence.md   # Walkthrough: ordered post-load stored procedures
 README.md
 ```
+
+---
+
+## Sample Pipeline JSON
+
+[`examples/PL_MetaDriven_Bronze_Ingest.json`](examples/PL_MetaDriven_Bronze_Ingest.json) is a complete, ready-to-deploy pipeline definition that demonstrates the full metadata-driven pattern end to end. It uses only the confirmed-working activity JSON formats documented in [`.github/copilot-instructions.md`](.github/copilot-instructions.md):
+
+| Activity | Type | Role |
+|----------|------|------|
+| `Lookup_AdlsContainer` | `Lookup` | Reads the `adls_container` parameter from `dbo.pipeline_parameters` |
+| `Lookup_TargetLakehouse` | `Lookup` | Reads the `target_lakehouse` parameter |
+| `Log_Start` | `SqlServerStoredProcedure` | Logs a `Started` event before any work begins |
+| `GetMetadata_Subfolders` | `GetMetadata` | Enumerates source subfolders in ADLS Gen2 |
+| `FE_Ingest_Folders` → `Copy_Folder_to_Table` | `ForEach` + `Copy` | Copies each folder's Parquet files into a Lakehouse table |
+| `Log_Success` | `SqlServerStoredProcedure` | Logs a `Succeeded` event on the success path |
+| `Log_Failure` | `SqlServerStoredProcedure` | Logs a `Failed` event on the failure path, capturing the error |
+
+It follows every core design rule: metadata-first Lookup, parameter values read from SQL (never hard-coded), and Start/Success/Failure logging via `dbo.usp_log_pipeline_event`.
+
+> **Before deploying:** replace every `<...-guid>` and `<...-display-name>` placeholder (workspace ID, SQL Database artifact/connection, ADLS connection, Lakehouse artifact/connection) with values from your own workspace. The agent fills these in automatically when it builds a pipeline via the MCP tools.
 
 ---
 

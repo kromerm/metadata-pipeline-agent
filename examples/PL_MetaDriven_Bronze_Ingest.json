@@ -1,0 +1,400 @@
+{
+  "properties": {
+    "description": "Metadata-driven bronze ingest. Reads runtime config from dbo.pipeline_parameters, enumerates source subfolders in ADLS Gen2, copies each folder's Parquet files into a Fabric Lakehouse table, and logs Start/Success/Failure to dbo.pipeline_logging via dbo.usp_log_pipeline_event. Replace every <...-guid> and <...-display-name> placeholder with values from your workspace before deploying.",
+    "parameters": {
+      "target_env": {
+        "type": "string",
+        "defaultValue": "dev"
+      }
+    },
+    "variables": {},
+    "activities": [
+      {
+        "name": "Lookup_AdlsContainer",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT parameter_value FROM dbo.pipeline_parameters WHERE pipeline_name = '@{pipeline().Pipeline}' AND parameter_name = 'adls_container' AND is_enabled = 1 AND environment IN ('all', '@{pipeline().parameters.target_env}')",
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None"
+          },
+          "datasetSettings": {
+            "type": "AzureSqlTable",
+            "connectionSettings": {
+              "name": "<sql-db-display-name>",
+              "properties": {
+                "annotations": [],
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "workspaceId": "<workspace-guid>",
+                  "artifactId": "<sql-db-artifact-guid>"
+                },
+                "externalReferences": {
+                  "connection": "<sql-connection-guid>"
+                }
+              }
+            },
+            "typeProperties": {}
+          },
+          "firstRowOnly": true
+        }
+      },
+      {
+        "name": "Lookup_TargetLakehouse",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT parameter_value FROM dbo.pipeline_parameters WHERE pipeline_name = '@{pipeline().Pipeline}' AND parameter_name = 'target_lakehouse' AND is_enabled = 1 AND environment IN ('all', '@{pipeline().parameters.target_env}')",
+            "queryTimeout": "02:00:00",
+            "partitionOption": "None"
+          },
+          "datasetSettings": {
+            "type": "AzureSqlTable",
+            "connectionSettings": {
+              "name": "<sql-db-display-name>",
+              "properties": {
+                "annotations": [],
+                "type": "FabricSqlDatabase",
+                "typeProperties": {
+                  "workspaceId": "<workspace-guid>",
+                  "artifactId": "<sql-db-artifact-guid>"
+                },
+                "externalReferences": {
+                  "connection": "<sql-connection-guid>"
+                }
+              }
+            },
+            "typeProperties": {}
+          },
+          "firstRowOnly": true
+        }
+      },
+      {
+        "name": "Log_Start",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          {
+            "activity": "Lookup_AdlsContainer",
+            "dependencyConditions": ["Succeeded"]
+          },
+          {
+            "activity": "Lookup_TargetLakehouse",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "connectionSettings": {
+          "name": "<sql-db-display-name>",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": "<workspace-guid>",
+              "artifactId": "<sql-db-artifact-guid>"
+            },
+            "externalReferences": {
+              "connection": "<sql-connection-guid>"
+            }
+          }
+        },
+        "typeProperties": {
+          "storedProcedureName": "dbo.usp_log_pipeline_event",
+          "storedProcedureParameters": {
+            "pipeline_name": {
+              "value": "@pipeline().Pipeline",
+              "type": "String"
+            },
+            "pipeline_run_id": {
+              "value": "@pipeline().RunId",
+              "type": "String"
+            },
+            "trigger_name": {
+              "value": "@pipeline().TriggerName",
+              "type": "String"
+            },
+            "activity_name": {
+              "value": "Log_Start",
+              "type": "String"
+            },
+            "log_level": {
+              "value": "INFO",
+              "type": "String"
+            },
+            "status": {
+              "value": "Started",
+              "type": "String"
+            },
+            "message": {
+              "value": "@concat('Bronze ingest started. Container=', activity('Lookup_AdlsContainer').output.firstRow.parameter_value, ' Lakehouse=', activity('Lookup_TargetLakehouse').output.firstRow.parameter_value)",
+              "type": "String"
+            }
+          }
+        }
+      },
+      {
+        "name": "GetMetadata_Subfolders",
+        "type": "GetMetadata",
+        "dependsOn": [
+          {
+            "activity": "Log_Start",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "fieldList": ["childItems"],
+          "datasetSettings": {
+            "annotations": [],
+            "type": "Binary",
+            "typeProperties": {
+              "location": {
+                "type": "AzureBlobFSLocation",
+                "fileSystem": "@{activity('Lookup_AdlsContainer').output.firstRow.parameter_value}"
+              }
+            },
+            "externalReferences": {
+              "connection": "<adls-connection-guid>"
+            }
+          },
+          "storeSettings": {
+            "type": "AzureBlobFSReadSettings",
+            "recursive": false,
+            "enablePartitionDiscovery": false
+          },
+          "formatSettings": {
+            "type": "BinaryReadSettings"
+          }
+        }
+      },
+      {
+        "name": "FE_Ingest_Folders",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "GetMetadata_Subfolders",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@activity('GetMetadata_Subfolders').output.childItems",
+            "type": "Expression"
+          },
+          "isSequential": false,
+          "batchCount": 10,
+          "activities": [
+            {
+              "name": "Copy_Folder_to_Table",
+              "type": "Copy",
+              "dependsOn": [],
+              "policy": {
+                "timeout": "0.12:00:00",
+                "retry": 1,
+                "retryIntervalInSeconds": 30,
+                "secureOutput": false,
+                "secureInput": false
+              },
+              "typeProperties": {
+                "source": {
+                  "type": "ParquetSource",
+                  "storeSettings": {
+                    "type": "AzureBlobFSReadSettings",
+                    "recursive": true,
+                    "wildcardFileName": "*.parquet",
+                    "enablePartitionDiscovery": false
+                  },
+                  "formatSettings": {
+                    "type": "ParquetReadSettings"
+                  },
+                  "datasetSettings": {
+                    "annotations": [],
+                    "type": "Parquet",
+                    "typeProperties": {
+                      "location": {
+                        "type": "AzureBlobFSLocation",
+                        "fileSystem": "@{activity('Lookup_AdlsContainer').output.firstRow.parameter_value}",
+                        "folderPath": "@{item().name}"
+                      }
+                    },
+                    "externalReferences": {
+                      "connection": "<adls-connection-guid>"
+                    }
+                  }
+                },
+                "sink": {
+                  "type": "LakehouseTableSink",
+                  "tableActionOption": "Append",
+                  "datasetSettings": {
+                    "annotations": [],
+                    "connectionSettings": {
+                      "name": "<lakehouse-display-name>",
+                      "properties": {
+                        "annotations": [],
+                        "type": "Lakehouse",
+                        "typeProperties": {
+                          "workspaceId": "<workspace-guid>",
+                          "artifactId": "<lakehouse-artifact-guid>",
+                          "rootFolder": "Tables"
+                        },
+                        "externalReferences": {
+                          "connection": "<lakehouse-connection-guid>"
+                        }
+                      }
+                    },
+                    "type": "LakehouseTable",
+                    "schema": [],
+                    "typeProperties": {
+                      "table": "@{item().name}"
+                    }
+                  }
+                },
+                "enableStaging": false
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Log_Success",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          {
+            "activity": "FE_Ingest_Folders",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "connectionSettings": {
+          "name": "<sql-db-display-name>",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": "<workspace-guid>",
+              "artifactId": "<sql-db-artifact-guid>"
+            },
+            "externalReferences": {
+              "connection": "<sql-connection-guid>"
+            }
+          }
+        },
+        "typeProperties": {
+          "storedProcedureName": "dbo.usp_log_pipeline_event",
+          "storedProcedureParameters": {
+            "pipeline_name": {
+              "value": "@pipeline().Pipeline",
+              "type": "String"
+            },
+            "pipeline_run_id": {
+              "value": "@pipeline().RunId",
+              "type": "String"
+            },
+            "trigger_name": {
+              "value": "@pipeline().TriggerName",
+              "type": "String"
+            },
+            "activity_name": {
+              "value": "Log_Success",
+              "type": "String"
+            },
+            "log_level": {
+              "value": "INFO",
+              "type": "String"
+            },
+            "status": {
+              "value": "Succeeded",
+              "type": "String"
+            },
+            "message": {
+              "value": "@concat('Bronze ingest completed. Source folders ingested to Lakehouse ', activity('Lookup_TargetLakehouse').output.firstRow.parameter_value)",
+              "type": "String"
+            }
+          }
+        }
+      },
+      {
+        "name": "Log_Failure",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          {
+            "activity": "FE_Ingest_Folders",
+            "dependencyConditions": ["Failed"]
+          }
+        ],
+        "connectionSettings": {
+          "name": "<sql-db-display-name>",
+          "properties": {
+            "annotations": [],
+            "type": "FabricSqlDatabase",
+            "typeProperties": {
+              "workspaceId": "<workspace-guid>",
+              "artifactId": "<sql-db-artifact-guid>"
+            },
+            "externalReferences": {
+              "connection": "<sql-connection-guid>"
+            }
+          }
+        },
+        "typeProperties": {
+          "storedProcedureName": "dbo.usp_log_pipeline_event",
+          "storedProcedureParameters": {
+            "pipeline_name": {
+              "value": "@pipeline().Pipeline",
+              "type": "String"
+            },
+            "pipeline_run_id": {
+              "value": "@pipeline().RunId",
+              "type": "String"
+            },
+            "trigger_name": {
+              "value": "@pipeline().TriggerName",
+              "type": "String"
+            },
+            "activity_name": {
+              "value": "Log_Failure",
+              "type": "String"
+            },
+            "log_level": {
+              "value": "ERROR",
+              "type": "String"
+            },
+            "status": {
+              "value": "Failed",
+              "type": "String"
+            },
+            "message": {
+              "value": "Bronze ingest failed during ForEach copy.",
+              "type": "String"
+            },
+            "error_message": {
+              "value": "@string(activity('FE_Ingest_Folders').output)",
+              "type": "String"
+            }
+          }
+        }
+      }
+    ]
+  }
+}
