@@ -193,6 +193,10 @@ Reference directly in downstream activities — no `SetVariable` needed:
 @activity('Lookup_adls_container').output.firstRow.parameter_value
 ```
 
+### Unsupported System Variables
+
+Fabric does **not** support `@pipeline().TriggerName`. Using it throws: _"'pipeline().TriggerName' is not a supported system variable"_. Use `@pipeline().TriggerType` instead to populate the `trigger_name` log column. Supported system variables include `@pipeline().Pipeline`, `@pipeline().RunId`, and `@pipeline().TriggerType`.
+
 ### Notebook vs. Script Activity for Logging
 
 Always use `type: SqlServerStoredProcedure` for logging. The `Script` activity fails validation when mixed with other activities using `externalReferences`.

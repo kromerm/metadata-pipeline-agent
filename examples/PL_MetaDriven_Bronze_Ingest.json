@@ -126,7 +126,7 @@
               "type": "String"
             },
             "trigger_name": {
-              "value": "@pipeline().TriggerName",
+              "value": "@pipeline().TriggerType",
               "type": "String"
             },
             "activity_name": {
@@ -312,7 +312,7 @@
               "type": "String"
             },
             "trigger_name": {
-              "value": "@pipeline().TriggerName",
+              "value": "@pipeline().TriggerType",
               "type": "String"
             },
             "activity_name": {
@@ -369,7 +369,7 @@
               "type": "String"
             },
             "trigger_name": {
-              "value": "@pipeline().TriggerName",
+              "value": "@pipeline().TriggerType",
               "type": "String"
             },
             "activity_name": {

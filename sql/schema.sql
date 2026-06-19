@@ -63,7 +63,7 @@ CREATE TABLE dbo.pipeline_logging (
     id                  BIGINT          IDENTITY(1,1)   NOT NULL,
     pipeline_name       NVARCHAR(200)   NOT NULL,           -- Fabric pipeline item name
     pipeline_run_id     NVARCHAR(200)   NOT NULL,           -- @pipeline().RunId
-    trigger_name        NVARCHAR(200)   NULL,               -- @pipeline().TriggerName
+    trigger_name        NVARCHAR(200)   NULL,               -- @pipeline().TriggerType (Fabric does not support @pipeline().TriggerName)
     trigger_type        NVARCHAR(50)    NULL,               -- 'Manual' | 'Schedule' | 'TumblingWindow'
     activity_name       NVARCHAR(200)   NULL,               -- name of the activity that logged this row
     log_level           NVARCHAR(20)    NOT NULL DEFAULT 'INFO',  -- 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
